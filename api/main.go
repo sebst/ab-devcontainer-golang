@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
 	_ "embed"
+	"fmt"
+	"os/exec"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -44,6 +47,45 @@ func main() {
 			})
 		}
 		return c.JSON(processList)
+	})
+
+	// New route for streaming stdout of /bin/test.sh
+	app.Get("/api/test", func(c *fiber.Ctx) error {
+		cmd := exec.Command("/workspaces/ab-devcontainer-golang/api/test.sh")
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		}
+
+		if err := cmd.Start(); err != nil {
+			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		}
+
+		scanner := bufio.NewScanner(stdout)
+		c.Set("Content-Type", "text/plain")
+		c.Set(fiber.HeaderContentEncoding, "chunked")
+		c.Set(fiber.HeaderTransferEncoding, "chunked")
+		c.Set(fiber.HeaderConnection, "keep-alive")
+
+		c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+			for scanner.Scan() {
+				text := scanner.Text()
+				if _, err := w.WriteString(text + "\n"); err != nil {
+					fmt.Println("Error writing:", err)
+					return
+				}
+				fmt.Println(text)
+				if err := w.Flush(); err != nil {
+					fmt.Println("Error flushing:", err)
+					return
+				}
+				w.Flush()
+			}
+			w.Flush()
+			cmd.Wait()
+		})
+
+		return nil
 	})
 
 	// Start the server on port 3000
